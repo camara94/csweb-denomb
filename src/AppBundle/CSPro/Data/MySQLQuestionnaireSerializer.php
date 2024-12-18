@@ -33,7 +33,7 @@ class MySQLQuestionnaireSerializer {
     private $targetConnection;  //target db connection
     private $casesIdMap;
     private $jobId;
-    private $job;
+    private $job; 
     private $labelDictionnaire;
 
     public function __construct(private Dictionary $dict, private $jobId, private PdoHelper $sourcePdo, private Connection $targetConnection, private LoggerInterface $logger) {
