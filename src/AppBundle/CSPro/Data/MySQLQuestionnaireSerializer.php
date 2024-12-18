@@ -36,8 +36,13 @@ class MySQLQuestionnaireSerializer {
     private $job; 
     private $labelDictionnaire;
 
-    public function __construct(private Dictionary $dict, private $jobId, private PdoHelper $sourcePdo, private Connection $targetConnection, private LoggerInterface $logger) {
+    public function __construct(Dictionary $dict, $jobId, PdoHelper $sourcePdo, Connection $targetConnection, LoggerInterface $logger) {
         $this->casesMap = [];
+        $this->dict = $dict;
+        $this->jobId = $jobId;
+        $this->sourcePdo = $sourcePdo;
+        $this->targetConnection = $targetConnection;
+        $this->logger = $logger;
         // Récupération du label du dictionnaire pour mettre à jour le préfix des tables de report
         $this->labelDictionnaire = str_replace(" ", "_", str_replace("_DICT", "", $dict->getName()));
     }
