@@ -40,10 +40,16 @@ class CSWebProcessRunnerByDict extends Command {
     private $dictionaryMap;
     private $maxCasesPerChunk;
     private $output;
+    private PdoHelper $pdo;
+    private KernelInterface $kernel;
+    private LoggerInterface $logger;
 
     //TODO: eventually use  DBAL instead of PDO for all the service operations.
-    public function __construct(private PdoHelper $pdo, private KernelInterface $kernel, private LoggerInterface $logger) {
+    public function __construct(PdoHelper $pdo, KernelInterface $kernel, LoggerInterface $logger) {
         parent::__construct();
+        $this->pdo = $pdo;
+        $this->kernel = $kernel;
+        $this->logger = $logger;
         $this->dictionaryMap = [];
     }
 
