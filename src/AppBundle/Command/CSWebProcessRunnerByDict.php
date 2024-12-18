@@ -134,7 +134,7 @@ class CSWebProcessRunnerByDict extends Command {
                   $this->output->writeln("after removal process count is " . count($dictionaryInfo->processes));
                   } */
                 sleep(1);
-            } catch (RuntimeException) {
+            } catch (RuntimeException $e) {
                 try {
                     $this->output->writeln("killing process");
                     defined('SIGKILL') OR define('SIGKILL', 9);
