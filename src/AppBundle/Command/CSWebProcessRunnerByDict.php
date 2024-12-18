@@ -145,7 +145,7 @@ class CSWebProcessRunnerByDict extends Command {
                                 $p->signal(SIGKILL);
                             }, $dictionaryInfo->processes);
                     }
-                } catch (\Throwable) {
+                } catch (\Throwable $ee) {
                     
                 }
                 break;
