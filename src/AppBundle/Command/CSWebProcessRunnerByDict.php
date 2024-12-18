@@ -137,7 +137,7 @@ class CSWebProcessRunnerByDict extends Command {
             } catch (RuntimeException) {
                 try {
                     $this->output->writeln("killing process");
-                    defined('SIGKILL') || define('SIGKILL', 9);
+                    defined('SIGKILL') OR define('SIGKILL', 9);
                     //kill the running threads
                     foreach (array_keys($this->dictionaryMap) as $dictionaryName) {
                         $dictionaryInfo = &$this->dictionaryMap[$dictionaryName];
