@@ -107,14 +107,21 @@ class DictionarySchemaHelper {
     private function cleanDictionarySchema() {
         try {
             $tables = $this->conn->getSchemaManager()->listTables();
+            // var_dump(count($tables)); die;
             if (count($tables) > 0) {
-                $this->conn->prepare("SET FOREIGN_KEY_CHECKS = 0;")->execute();
 
+                $dictionaryLabel = str_replace(" ", "_", str_replace("_DICT", "", $this->dictionary->getName()));
+                $mystring = strtolower($dictionaryLabel)."_";
                 foreach ($tables as $table) {
-                    $sql = 'DROP TABLE ' . MySQLDictionarySchemaGenerator::quoteString($table->getName());
-                    $this->conn->prepare($sql)->execute();
+                    if(substr($table->getName(), 0, strlen($mystring)) === $mystring){
+                        
+                        $sql = 'DROP TABLE "' . $table->getName() .'" CASCADE';
+                        // $this->conn->prepare('ALTER TABLE "' . $table->getName().'" DISABLE TRIGGER ALL;')->execute();
+                        $this->conn->prepare($sql)->execute();
+                        // $this->conn->prepare('ALTER TABLE "' . $table->getName().'" ENABLE TRIGGER ALL;')->execute();
+
+                    }
                 }
-                $this->conn->prepare("SET FOREIGN_KEY_CHECKS = 1;")->execute();
             }
         } catch (\Exception $e) {
             $strMsg = "Failed deleting tables from database: " . $this->connectionParams['dbname'] . " while processsing Dictionary: " . $this->dictionaryName;
@@ -122,6 +129,7 @@ class DictionarySchemaHelper {
             throw $e;
         }
     }
+
 
     private function createDictionarySchema() {
 
@@ -164,91 +172,122 @@ class DictionarySchemaHelper {
         return $result !== false;
     }
 
-    public function IsValidSchema(): bool {
-        //check the time stamp of dictionary in the meta table with the original dictionary timestamp.
-        $isValid = false;
-        try {
-            if (!$this->tableExists("`cspro_meta`")) {
-                return $isValid;
-            }
-            $stm = "SELECT source_modified_time FROM `cspro_meta` ";
-            $stmt = $this->conn->executeQuery($stm);
-            $result = $stmt->fetch();
-            if ($result) {
-                $stm = "SELECT count(*) FROM `cspro_dictionaries` "
-                        . " WHERE  `dictionary_name` = :dictionaryName and `modified_time` = :source_modified_time";
-                $bind['dictionaryName'] = $this->dictionaryName;
-                $bind['source_modified_time'] = $result['source_modified_time'];
+  /*** On doit adapter ici encore */
+  public function IsValidSchema(): bool {
+    $bind = [];
+    //check the time stamp of dictionary in the meta table with the original dictionary timestamp.
+    $isValid = false;
 
-                $result = (int) $this->pdo->fetchValue($stm, $bind);
-                $isValid = ($result === 1) ? true : false;
-            }
-        } catch (\Exception $e) {
-            $strMsg = "Failed validating schema  " . $this->connectionParams['dbname'] . " while processsing Dictionary: " . $this->dictionaryName;
-            $this->logger->error($strMsg, array("context" => (string) $e));
-            throw $e;
+    //Récupération du label du dictionnaire concerné par les insertions dans la table labeldictionnaire_cspro_meta
+    $dictionaryLabel = str_replace(" ", "_", str_replace("_DICT", "", $this->dictionary->getName()));
+
+    try {
+        if (!$this->tableExists( "".strtolower($dictionaryLabel)."_cspro_meta")) {
+            return $isValid;
         }
-        $this->logger->debug('The schema valid flag is ' . $isValid);
-        return $isValid;
+        $stm = "SELECT source_modified_time FROM ".strtolower($dictionaryLabel)."_cspro_meta ";
+        $stmt = $this->conn->executeQuery($stm);
+        $result = $stmt->fetch();
+        if ($result) {
+            $stm = "SELECT count(*) FROM `cspro_dictionaries` "
+                    . " WHERE  `dictionary_name` = :dictionaryName and `modified_time` = :source_modified_time";
+            $bind['dictionaryName'] = $this->dictionaryName;
+            $bind['source_modified_time'] = $result['source_modified_time'];
+
+            $result = (int) $this->pdo->fetchValue($stm, $bind);
+            $isValid = ($result === 1) ? true : false;
+        }
+    } catch (\Exception $e) {
+        $strMsg = "Failed validating schema  " . $this->connectionParams['dbname'] . " while processsing Dictionary: " . $this->dictionaryName;
+        $this->logger->error($strMsg, ["context" => (string) $e]);
+        throw $e;
     }
+    $this->logger->debug('The schema valid flag is ' . $isValid);
+    return $isValid;
+}
+
+
+  /** end */
 
     //reset in process jobs to not started at the start of the long process to be picked up again
+    /** on doit adapter ici encore */
     public function resetInProcesssJobs(): int {
+        $bind = [];
+        //Récupération du label du dictionnaire concerné par les insertions dans la table labeldictionnaire_cspro_jobs
+        $dictionaryLabel = str_replace(" ", "_", str_replace("_DICT", "", $this->dictionary->getName()));
+
         try {
-            $stm = "UPDATE `cspro_jobs` SET `status`= :status WHERE `status` = :in_process_jobs";
+            $stm = "UPDATE ".strtolower($dictionaryLabel)."_cspro_jobs SET status= :status WHERE status = :in_process_jobs";
             $bind['status'] = self::JOB_STATUS_NOT_STARTED;
             $bind['in_process_jobs'] = self::JOB_STATUS_IN_PROCESS;
             $count = $this->conn->executeUpdate($stm, $bind);
         } catch (\Exception $e) {
             $strMsg = "Failed resetting jobs in schema  " . $this->connectionParams['dbname'] . " while processsing Dictionary: " . $this->dictionaryName;
-            $this->logger->error($strMsg, array("context" => (string) $e));
+            $this->logger->error($strMsg, ["context" => (string) $e]);
             throw $e;
         }
         return $count;
     }
 
+
+    /*** end */
+
+    /** * on doit adapter ici */
     public function processNextJob($maxCasesPerChunk): int {
+        //Récupération du label du dictionnaire concerné par les insertions dans la table labeldictionnaire_cspro_jobs
+        $dictionaryLabel = str_replace(" ", "_", str_replace("_DICT", "", $this->dictionary->getName()));
+
+        $bind = [];
         $jobId = 0;
 //find a job that is not being processed and update its status to processing 
         try {
-            $stm = "SELECT `id` FROM `cspro_jobs` "
-                    . " WHERE  `status` = " . self::JOB_STATUS_NOT_STARTED . " ORDER BY `id`  LIMIT 1 ";
+            $stm = "SELECT id FROM ".strtolower($dictionaryLabel)."_cspro_jobs "
+            . " WHERE  status = " . self::JOB_STATUS_NOT_STARTED . " ORDER BY id  LIMIT 1 ";
+
             $stmt = $this->conn->prepare($stm);
-            $stmt->execute();
-            $result = $stmt->fetchAll();
-            $jobId = count($result) > 0 ? $result[0]['id'] : $this->createJob($maxCasesPerChunk);
+            $resultSet = $stmt->execute();
+            $result = $resultSet->fetchAllAssociative();
+            $jobId = (is_countable($result) ? count($result) : 0) > 0 ? $result[0]['id'] : $this->createJob($maxCasesPerChunk);
             if ($jobId) {
-                $stm = "UPDATE `cspro_jobs` SET `status`= :status WHERE `id` = :id";
+                $stm = "UPDATE ".strtolower($dictionaryLabel)."_cspro_jobs SET status= :status WHERE id = :id";
                 $bind['status'] = self::JOB_STATUS_IN_PROCESS;
                 $bind['id'] = $jobId;
                 $this->conn->executeUpdate($stm, $bind);
             }
         } catch (\Exception $e) {
             $strMsg = "Failed getting next job from database:  " . $this->connectionParams['dbname'] . " while processsing Dictionary: " . $this->dictionaryName;
-            $this->logger->error($strMsg, array("context" => (string) $e));
+            $this->logger->error($strMsg, ["context" => (string) $e]);
             throw $e;
         }
         return $jobId;
     }
 
-    public function createJob($maxCasesPerChunk): int {
-//if a job already exists - get the endCaseId and endRevision if there are no cases at this revision 
-//SELECT the most recent job and get the endCaseId and endRevision 
-        $jobId = 0;
-        $stm = "SELECT `id`, `start_caseid`, `start_revision`, `end_caseid`, `end_revision`, `cases_processed`, `status` FROM `cspro_jobs` "
-                . "ORDER BY `id` DESC LIMIT 1 ";
 
+    /**** */
+
+    /*** On doit adapter ici encore */
+    public function createJob($maxCasesPerChunk): int {
+        //Récupération du label du dictionnaire concerné par les requetes sur la table labeldictionnaire_cspro_jobs
+        $dictionaryLabel = str_replace(" ", "_", str_replace("_DICT", "", $this->dictionary->getName()));
+
+        $bind = [];
+        //if a job already exists - get the endCaseId and endRevision if there are no cases at this revision 
+        //SELECT the most recent job and get the endCaseId and endRevision 
+        $jobId = 0;
+
+        $stm = "SELECT id, start_caseid, start_revision, end_caseid, end_revision, cases_processed, status FROM ".strtolower($dictionaryLabel)."_cspro_jobs "
+                . "ORDER BY id DESC LIMIT 1 ";
         try {
             $stmt = $this->conn->prepare($stm);
-            $stmt->execute();
-            $result = $stmt->fetchAll();
+            $resultSet = $stmt->execute();
+            $result = $resultSet->fetchAllAssociative();
             $endRevision = 0;
             $endCaseId = 0;
             if ($result) {
                 $endRevision = $result[0]['end_revision'];
                 $endCaseId = $result[0]['end_caseid'];
             }
-//select cases from the source cases  table  where revision = end_revision  end_revision id > end_caseid 
+        //select cases from the source cases  table  where revision = end_revision  end_revision id > end_caseid 
             $stm = "SELECT `id`, `revision` FROM " . $this->dictionaryName . " WHERE revision = :endRevision and `id` > :endCaseId  "
                     . " UNION "
                     . "SELECT `id`, `revision` FROM " . $this->dictionaryName . " WHERE revision > :endRevision "
@@ -269,18 +308,20 @@ class DictionarySchemaHelper {
                 $bind['endCaseId'] = $result[count($result) - 1]['id'];
                 $bind['endRevision'] = $result[count($result) - 1]['revision'];
                 $bind['cases_to_process'] = count($result);
-                $stm = "INSERT INTO `cspro_jobs`(`start_caseid`, `start_revision`, `end_caseid`, `end_revision` ,`cases_to_process`) "
-                        . "VALUES (:startCaseId, :startRevision, :endCaseId, :endRevision, :cases_to_process)";
+                $stm = "INSERT INTO ".strtolower($dictionaryLabel)."_cspro_jobs(start_caseid, start_revision, end_caseid, end_revision ,cases_to_process) "
+                . "VALUES (:startCaseId, :startRevision, :endCaseId, :endRevision, :cases_to_process)";
                 $stmt = $this->conn->executeUpdate($stm, $bind);
                 $jobId = $this->conn->lastInsertId();
             }
             return $jobId;
         } catch (\Exception $e) {
             $strMsg = "Failed creating job in database:  " . $this->connectionParams['dbname'] . " while processsing Dictionary: " . $this->dictionaryName;
-            $this->logger->error($strMsg, array("context" => (string) $e));
+            $this->logger->error($strMsg, ["context" => (string) $e]);
             throw $e;
         }
     }
+
+    /** end */
 
     public function blobBreakOut($jobId) {
         //$dictionary, PdoHelper $sourceDB, $targetDB, $jobID 

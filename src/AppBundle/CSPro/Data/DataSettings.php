@@ -137,48 +137,49 @@ class DataSettings {
         return $flag;
     }
 
+    /*** On doit adapter ici  encore */
     public function getDataCounts(&$dataSettings) {
-//get each dictionary get the counts in the source and target schema
+        //get each dictionary get the counts in the source and target schema
         foreach ($dataSettings as &$dataSetting) {
             $dataSetting['totalCases'] = "";
             $dataSetting['processedCases'] = "";
             $dataSetting['lastProcessedTime'] = "";
 
             if (isset($dataSetting['targetSchemaName'])) {
+                $name_dict = str_replace(" ", "_", str_replace("_DICT", "", $dataSetting['name']))."_";
+
                 $stm = "SELECT count(*) FROM `" . $dataSetting['name'] . "` WHERE `deleted` = 0";
                 $caseCount = (int) $this->pdo->fetchValue($stm);
                 $dataSetting['totalCases'] = $caseCount;
 
-//get number of cases processsed.
-                $connectionParams = array(
-                    'dbname' => $dataSetting['targetSchemaName'],
-                    'user' => $dataSetting['dbUserName'],
-                    'password' => $dataSetting['dbPassword'],
-                    'host' => $dataSetting['targetHostName'],
-                    'driver' => 'pdo_mysql',
-                );
+        //get number of cases processsed.
+                $connectionParams = ['dbname' => $dataSetting['targetSchemaName'], 'user' => $dataSetting['dbUserName'], 'password' => $dataSetting['dbPassword'], 'host' => $dataSetting['targetHostName'], 'driver' => 'pdo_pgsql'];
                 $config = new Configuration();
                 try {
                     $conn = DriverManager::getConnection($connectionParams, $config);
 
-//get processsed case count 
+        //get processsed case count 
                     $dataSetting['processedCases'] = 0;
-                    $statement = $conn->executeQuery('SELECT count(*) FROM `cases` where `deleted`=0');
-                    $processedCases = $statement->fetchColumn();
+                    $statement = $conn->executeQuery('SELECT count(*) FROM '.$name_dict.'cases where deleted=0');
+                    $processedCases = $statement->fetchOne();
                     $dataSetting['processedCases'] = $processedCases;
 
-//get processed time (modified time) from the most recently processed job
-                    $statement = $conn->executeQuery('SELECT id , modified_time FROM `cspro_jobs` WHERE id = (SELECT max(id) from cspro_jobs where status =2)');
-                    $dataSetting['lastProcessedTime'] = $statement->fetchColumn(1);
+        //get processed time (modified time) from the most recently processed job
+                    $statement = $conn->executeQuery('SELECT id , modified_time FROM '.$name_dict.'cspro_jobs WHERE id = (SELECT max(id) from '.$name_dict.'cspro_jobs where status =2)');
+                    if (($row = $statement->fetchAssociative()) !== false) {
+                        $dataSetting['lastProcessedTime'] = $row['modified_time'];
+                    }
                 } catch (\Exception $e) {
                     if (strpos((string) $e, 'SQLSTATE[42S02]') == FALSE) {
-                        $this->logger->error('Failed getting case counts and last processed time', array("context" => (string) $e));
+                        $this->logger->error('Failed getting case counts and last processed time', ["context" => (string) $e]);
                     }
                 }
             }
         }
         return $dataSettings;
     }
+
+    /*** end */
 
     function deleteDataSetting($dictionaryId): bool {
         try {

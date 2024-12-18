@@ -34,25 +34,27 @@ class MySQLQuestionnaireSerializer {
     private $casesIdMap;
     private $jobId;
     private $job;
+    private $labelDictionnaire;
 
-    public function __construct(Dictionary $dict, $jobId, PdoHelper $sourcePdo, Connection $targetConnection, LoggerInterface $logger) {
-        $this->logger = $logger;
-        $this->dict = $dict;
-        $this->sourcePdo = $sourcePdo;
-        $this->targetConnection = $targetConnection;
-        $this->casesMap = array();
-        $this->jobId = $jobId;
+    public function __construct(private Dictionary $dict, private $jobId, private PdoHelper $sourcePdo, private Connection $targetConnection, private LoggerInterface $logger) {
+        $this->casesMap = [];
+        // Récupération du label du dictionnaire pour mettre à jour le préfix des tables de report
+        $this->labelDictionnaire = str_replace(" ", "_", str_replace("_DICT", "", $dict->getName()));
     }
 
-    public function serializeQuestionnaries() {
-//        ini_set('memory_limit', '16G'); //increase memory if php memory limit is hit 
+
+    /*** On doit adapter ici */
+    public function serializeQuestionnaries($processCasesOptions) {
+        $bind = [];
+        DictionarySchemaHelper::updateProcessCasesOptions($this->dict, $processCasesOptions);
+        //        ini_set('memory_limit', '16G'); //increase memory if php memory limit is hit 
         $this->getJobInformation();
         $this->getQuestionnarieListToSerilaize();
         if (count($this->casesMap) == 0) {
             $this->logger->warning("No cases available to serialize for jobId: " . $this->jobId);
             return;
         }
-        $strMsg = "Serializing "  .  count($this->casesMap) . " cases for dictionary : "  . $this->dict->getName() ;
+        $strMsg = "Serializing " . count($this->casesMap) . " cases for dictionary : " . $this->dict->getName();
         $this->logger->info($strMsg);
         //delete questionnaires in a separate transaction to avoid deadlock issues
         try {
@@ -61,7 +63,7 @@ class MySQLQuestionnaireSerializer {
             $strMsg = '[SourceDB: ' . $this->sourcePdo->getDsn() . ' TargetDB: ' . $this->targetConnection->getDatabase();
             $strMsg .= ' Dictionary: ' . $this->dict->getName();
             $strMsg .= '] Failed serializing cases';
-            $this->logger->error($strMsg, array("context" => (string) $e));
+            $this->logger->error($strMsg, ["context" => (string) $e]);
             throw new \Exception($strMsg, 0, $e);
         }
 
@@ -75,7 +77,7 @@ class MySQLQuestionnaireSerializer {
 
             //update job
             $jobId = $this->jobId;
-            $stm = "UPDATE `cspro_jobs` SET `status`= :status, `cases_processed` = :totalCases WHERE `id` = :jobId";
+            $stm = "UPDATE ".strtolower($this->labelDictionnaire)."_cspro_jobs SET status= :status, cases_processed = :totalCases WHERE id = :jobId";
             $bind['status'] = DictionarySchemaHelper::JOB_STATUS_COMPLETE;
             $bind['jobId'] = $this->jobId;
             $bind['totalCases'] = $caseCount;
@@ -86,19 +88,19 @@ class MySQLQuestionnaireSerializer {
             $strMsg = '[SourceDB: ' . $this->sourcePdo->getDsn() . ' TargetDB: ' . $this->targetConnection->getDatabase();
             $strMsg .= ' Dictionary: ' . $this->dict->getName();
             $strMsg .= '] Failed serializing cases';
-            $this->logger->error($strMsg, array("context" => (string) $e));
+            $this->logger->error($strMsg, ["context" => (string) $e]);
             $this->targetConnection->rollBack();
             throw new \Exception($strMsg, 0, $e);
         }
     }
 
+    /*** end */
+
     public function getJobInformation() {
         try {
-            $stm = "SELECT `id`, `start_caseid`, `start_revision`, `end_caseid`, `end_revision`, `cases_to_process` FROM `cspro_jobs` "
-                    . " WHERE  `id` = " . $this->jobId;
-            $stmt = $this->targetConnection->prepare($stm);
-            $stmt->execute();
-            $result = $stmt->fetchAll();
+            $stm = "SELECT id, start_caseid, start_revision, end_caseid, end_revision, cases_to_process FROM ".strtolower($this->labelDictionnaire)."_cspro_jobs "
+                    . " WHERE  id = " . $this->jobId;
+            $result = $this->targetConnection->fetchAllAssociative($stm);
             unset($this->job);
             if ($result) {
                 $this->job = $result [0];
@@ -107,10 +109,11 @@ class MySQLQuestionnaireSerializer {
             $strMsg = '[SourceDB: ' . $this->sourcePdo->getDsn() . ' TargetDB: ' . $this->targetConnection->getDatabase();
             $strMsg .= ' Dictionary: ' . $this->dict->getName();
             $strMsg .= "] Failed getting job information jobID: " . $this->jobId;
-            $this->logger->error($strMsg, array("context" => (string) $e));
+            $this->logger->error($strMsg, ["context" => (string) $e]);
             throw new \Exception($strMsg, 0, $e);
         }
     }
+
 
     //get list of questionnaires to process for the current job
     public function getQuestionnarieListToSerilaize() {
@@ -152,7 +155,8 @@ class MySQLQuestionnaireSerializer {
     }
 
     //cascade delete exisiting questionnaires before breaking out JSON
-    public function deleteQuestionnaires() {
+   /*** On doit adapter ici  */
+   public function deleteQuestionnaires() {
         //delete all the questionnaires that match 
         $caseList = array_keys($this->casesMap);
         $strCaseList = "'" . implode("','", $caseList) . "'";
@@ -160,15 +164,15 @@ class MySQLQuestionnaireSerializer {
         $this->targetConnection->beginTransaction();
         try {
             //delete existing cases
-            $stm = 'DELETE FROM `cases` WHERE `id` in ( ' . $strCaseList . ")";
+            $stm = 'DELETE FROM '.strtolower($this->labelDictionnaire).'_cases WHERE id in ( ' . $strCaseList . ')';
             $count = $this->targetConnection->executeUpdate($stm);
 
             //delete notes for these cases
-            $stm = 'DELETE FROM `notes` WHERE `case_id` in ( ' . $strCaseList . ")";
+            $stm = 'DELETE FROM '.strtolower($this->labelDictionnaire).'_notes WHERE case_id in ( ' . $strCaseList . ')';
             $this->targetConnection->executeUpdate($stm);
 
             //cascade delete cases from break out tables
-            $stm = 'DELETE FROM `level-1` WHERE `case-id` in ( ' . $strCaseList . ")";
+            $stm = 'DELETE FROM "'.strtolower($this->labelDictionnaire).'_level-1" WHERE "case-id" in ( ' . $strCaseList . ')';
             $count = $this->targetConnection->executeUpdate($stm);
             $this->logger->debug("Deleted $count cases");
 
@@ -177,58 +181,72 @@ class MySQLQuestionnaireSerializer {
             $strMsg = '[SourceDB: ' . $this->sourcePdo->getDsn() . ' TargetDB: ' . $this->targetConnection->getDatabase();
             $strMsg .= ' Dictionary: ' . $this->dict->getName();
             $strMsg .= '] Failed deleting cases';
-            $this->logger->error($strMsg, array("context" => (string) $e));
+            $this->logger->error($strMsg, ["context" => (string) $e]);
             $this->targetConnection->rollBack();
             throw new \Exception($strMsg, 0, $e);
         }
     }
 
-    private function generateLevelInsertStatement(&$nameTypeMap): string {
-        $stm = "INSERT INTO `level-1` (";
+   /*** end */
+
+   
+   /*** On doit adapter ici */
+
+   private function generateLevelInsertStatement(&$nameTypeMap): string {
+        $stm = 'INSERT INTO "'.strtolower($this->labelDictionnaire).'_level-1" (';
         //TODO: fix for multiple levels
         $iLevel = 0;
         $level = $this->dict->getLevels()[$iLevel];
-
-        for ($iItem = 0; $iItem < count($level->getIdItems()); $iItem++) {
+        for ($iItem = 0; $iItem < (is_countable($level->getIdItems()) ? count($level->getIdItems()) : 0); $iItem++) {
             $this->getRecordItemNameType($level->getIdItems()[$iItem], $nameTypeMap);
         }
         $keys = array_keys($nameTypeMap);
-        $quotedItemNames = array();
+        $quotedItemNames = [];
         foreach ($keys as $key) {
-            $quotedItemNames[] = MySQLDictionarySchemaGenerator::quoteString($key);
+            // $quotedItemNames[] = MySQLDictionarySchemaGenerator::quoteString($key);
+            $quotedItemNames[] = $key;
         }
         $itemList = implode(",", $quotedItemNames);
-        $itemList = "`case-id`," . $itemList;
+        $itemList = '"case-id",' . $itemList;
 
-        $stm .= $itemList . ") VALUES ";
+        $stm .= $itemList . ') VALUES ';
         return $stm;
     }
 
+   /*** end */
+
+
+    /*** On doit adapter ici */
     private function generateRecordInsertStatement(Record $record, &$nameTypeMap): string {
-        $recordName = MySQLDictionarySchemaGenerator::quoteString(strtolower($record->getName()));
+        $recordName = strtolower($this->labelDictionnaire)."_".strtolower($record->getName());
         $stm = "INSERT INTO $recordName (";
 
         $this->getRecordItemsNameType($record, $nameTypeMap);
         $keys = array_keys($nameTypeMap);
-        $quotedItemNames = array();
+        $quotedItemNames = [];
         foreach ($keys as $key) {
-            $quotedItemNames[] = MySQLDictionarySchemaGenerator::quoteString($key);
+            // $quotedItemNames[] = MySQLDictionarySchemaGenerator::quoteString($key);
+            $quotedItemNames[] = $key;
         }
 
         $itemList = implode(",", $quotedItemNames);
 
         $parentLevelName = "level-" . (string) ($record->getLevel()->getLevelNumber() + 1);
         $parentId = $parentLevelName . "-id";
+        $parentId = '"'.$parentId.'"';
 
         if ($record->getMaxRecords() > 1) {
-            $itemList = "`$parentId`, `occ`, " . $itemList;
+            $itemList = "$parentId, occ, " . $itemList;
         } else {
-            $itemList = "`$parentId`," . $itemList;
+            $itemList = "$parentId," . $itemList;
         }
+        $itemList = rtrim($itemList, ",");
         $stm .= $itemList . ") VALUES ";
 
         return $stm;
     }
+
+    /*** end */
 
     private function getRecordItemsNameType(Record $record, &$nameTypeMap) {
 
@@ -298,13 +316,13 @@ class MySQLQuestionnaireSerializer {
         return $count;
     }
 
+    /*** On doit adapter ici  */
     public function serializeCases(): int {
         $caseList = array_keys($this->casesMap);
-        $stm = "INSERT INTO `cases` (`id`, `key`, `label`, `last_modified_revision`, `deleted`, `verified`, `partial_save_mode`, `partial_save_field_name`, `partial_save_level_key`, `partial_save_record_occurrence`, `partial_save_item_occurrence`, "
-                . "                 `partial_save_subitem_occurrence`) VALUES ";
-        $itemNames = array("guid", "caseids", "label", "revision", "deleted", "verified", "partial_save_mode", "partial_save_field_name", "partial_save_level_key", "partial_save_record_occurrence", "partial_save_item_occurrence",
-            "partial_save_subitem_occurrence");
-        $values = array();
+        $stm = "INSERT INTO ".strtolower($this->labelDictionnaire)."_cases (id, key, label, last_modified_revision, deleted, verified, partial_save_mode, partial_save_field_name, partial_save_level_key, partial_save_record_occurrence, partial_save_item_occurrence, "
+                . "                 partial_save_subitem_occurrence) VALUES ";
+        $itemNames = ["guid", "caseids", "label", "revision", "deleted", "verified", "partial_save_mode", "partial_save_field_name", "partial_save_level_key", "partial_save_record_occurrence", "partial_save_item_occurrence", "partial_save_subitem_occurrence"];
+        $values = [];
         $singlePlaceholder = '(' . implode(', ', array_fill(0, count($itemNames), '?')) . ')';
         // (?, ?), ... , (?, ?)
         $placeholders = implode(', ', array_fill(0, count($this->casesMap), $singlePlaceholder));
@@ -324,36 +342,66 @@ class MySQLQuestionnaireSerializer {
             $this->casesMap[$case] = json_decode($caseRow['questionnaire'], true);
             if (json_last_error() != JSON_ERROR_NONE) {
                 $strMsg = '[SourceDB: ' . $this->sourcePdo->getDsn() . ' TargetDB: ' . $this->targetConnection->getDatabase();
-                $strMsg .= ' Dictionary: ' . $this->dict->getName() . "] Failed writing cases to database for  jobID: ". $this->jobId;
+                $strMsg .= ' Dictionary: ' . $this->dict->getName() . "] Failed writing cases to database for  jobID: " . $this->jobId;
                 $strQuestionnaire = ' Case: ' . $case . ' Questionnaire: ' . $caseRow['questionnaire'];
-                $this->logger->error($strMsg . $strQuestionnaire .  " Error decoding json questionnaire. " . json_last_error_msg());
+                $this->logger->error($strMsg . $strQuestionnaire . " Error decoding json questionnaire. " . json_last_error_msg());
                 throw new \Exception($strMsg);
             }
         }
 
         $stm .= $placeholders;
         try {
-            $count = $this->targetConnection->executeUpdate($stm, $values);
+            if(count($values) > 2100 ){
+                $colonnes = floor(count($values)/count(array_fill(0, count($this->casesMap), $singlePlaceholder)));
+                if(1200 % $colonnes != 0){
+                    $length_chunk = floor(1200 / $colonnes) * $colonnes;
+                }else{
+                    $length_chunk = 1200;
+                }
+
+                $chunkedValues = array_chunk($values, $length_chunk);
+                $count = 0;
+                foreach($chunkedValues as $chunkedValue){
+                    $limited = (count($chunkedValue)/$colonnes);
+                    $part_fill = array_slice(array_fill(0, count($this->casesMap), $singlePlaceholder), 0, $limited);
+                    $stm2 = "INSERT INTO ".strtolower($this->labelDictionnaire)."_cases (id, key, label, last_modified_revision, deleted, verified, partial_save_mode, partial_save_field_name, partial_save_level_key, partial_save_record_occurrence, partial_save_item_occurrence, "
+                    . "                 partial_save_subitem_occurrence) VALUES ";
+                            $itemNames = ["guid", "caseids", "label", "revision", "deleted", "verified", "partial_save_mode", "partial_save_field_name", "partial_save_level_key", "partial_save_record_occurrence", "partial_save_item_occurrence",
+                                "partial_save_subitem_occurrence"];
+    
+                    $placeholders2 = implode(', ', $part_fill);
+
+                    $stm2 .= $placeholders2;
+
+                    $count_with_chunk = $this->targetConnection->executeUpdate($stm2, $chunkedValue);
+                    $count += $count_with_chunk;
+                }
+            }else{
+                $count = $this->targetConnection->executeUpdate($stm, $values);
+            }
             $this->logger->debug("inserted  $count rows into cases table");
         } catch (\Exception $e) {
             $strMsg = '[SourceDB: ' . $this->sourcePdo->getDsn() . ' TargetDB: ' . $this->targetConnection->getDatabase();
             $strMsg .= ' Dictionary: ' . $this->dict->getName();
             $strMsg .= "] Failed writing cases to database for  jobID: " . $this->jobId;
-            $this->logger->error($strMsg, array("context" => (string) $e));
+            $this->logger->error($strMsg, ["context" => (string) $e]);
             throw new \Exception($strMsg, 0, $e);
         }
         return $count;
     }
 
+    /*** end */
+
+    /*** On doit adapter ici */
     public function serializeNotes(): int {
         $caseList = array_keys($this->casesMap);
 
         //select notes for the cases in case map from the source dictionary notes table
         $sourceNotesTable = '`' . $this->dict->getName() . '_notes`';
         $stm = 'SELECT LCASE(CONCAT_WS("-", LEFT(HEX( `case_guid`), 8), MID(HEX(`case_guid`), 9,4), MID(HEX( `case_guid`), 13,4), MID(HEX( `case_guid`), 17,4), RIGHT(HEX( `case_guid`), 12))) as `case_id`, '
-                . "`operator_id`, `field_name`, `level_key`, `record_occurrence`, `item_occurrence`, `subitem_occurrence`, `content`, `modified_time`	FROM " . $sourceNotesTable . ' WHERE case_guid IN ( ';
+                . "`operator_id`, `field_name`, `level_key`, `record_occurrence`, `item_occurrence`, `subitem_occurrence`, `content`, `modified_time`   FROM " . $sourceNotesTable . ' WHERE case_guid IN ( ';
 
-        $whereData = array();
+        $whereData = [];
         $n = 0;
         // prepare the where clause in list for all the case guids to delete the notes for the correponding cases
         foreach ($caseList as $case) {
@@ -373,17 +421,17 @@ class MySQLQuestionnaireSerializer {
 
             $result = $stmt->fetchAll();
 
-            if (count($result) == 0)
+            if ((is_countable($result) ? count($result) : 0) == 0)
                 return 0;
 
             //add the notes for these cases to  the notes table 
-            $stm = "INSERT INTO `notes` (`case_id`, `field_name`, `level_key`, `record_occurrence`, `item_occurrence`, "
-                    . "`subitem_occurrence`, `content`, `operator_id`, `modified_time`) VALUES ";
-            $itemNames = array("case_id", "field_name", "level_key", "record_occurrence", "item_occurrence", "subitem_occurrence", "content", "operator_id", "modified_time");
-            $values = array();
+            $stm = "INSERT INTO ".strtolower($this->labelDictionnaire)."_notes (case_id, field_name, level_key, record_occurrence, item_occurrence, "
+                    . "subitem_occurrence, content, operator_id, modified_time) VALUES ";
+            $itemNames = ["case_id", "field_name", "level_key", "record_occurrence", "item_occurrence", "subitem_occurrence", "content", "operator_id", "modified_time"];
+            $values = [];
             $singlePlaceholder = '(' . implode(', ', array_fill(0, count($itemNames), '?')) . ')';
             // (?, ?), ... , (?, ?)
-            $placeholders = implode(', ', array_fill(0, count($result), $singlePlaceholder));
+            $placeholders = implode(', ', array_fill(0, is_countable($result) ? count($result) : 0, $singlePlaceholder));
 
             $this->logger->debug('Inserting into notes table');
             foreach ($result as $row) {
@@ -407,23 +455,27 @@ class MySQLQuestionnaireSerializer {
             $strMsg = '[SourceDB: ' . $this->sourcePdo->getDsn() . ' TargetDB: ' . $this->targetConnection->getDatabase();
             $strMsg .= ' Dictionary: ' . $this->dict->getName();
             $strMsg .= "] Failed writing case notes to database for  jobID: " . $this->jobId;
-            $this->logger->error($strMsg, array("context" => (string) $e));
+            $this->logger->error($strMsg, ["context" => (string) $e]);
             throw new \Exception($strMsg, 0, $e);
         }
         return $count;
     }
 
+
+    /*** end */
+
+    /**** On doit adapter ici */
     private function getCaseIdsMap() {
         try {
             // Select all the cases sent by the client that exist on the server
-            $stm = 'SELECT  `level-1-id` as id, `case-id` as guid FROM `level-1` WHERE `case-id` in (';
+            $stm = 'SELECT  "level-1-id" as id, "case-id" as guid FROM "'.strtolower($this->labelDictionnaire).'_level-1" WHERE "case-id" in (';
             $strOrderBy = ' ORDER BY  id';
 
             $strCaseList = "'" . implode("','", array_keys($this->casesMap)) . "'";
             $stm = $stm . $strCaseList . ")" . $strOrderBy;
-            $result = $this->targetConnection->fetchAll($stm);
+            $result = $this->targetConnection->fetchAllAssociative($stm);
 
-            $this->casesIdMap = array();
+            $this->casesIdMap = [];
             foreach ($result as $row) {
                 $this->casesIdMap[$row ['guid']] = $row['id'];
             }
@@ -431,10 +483,13 @@ class MySQLQuestionnaireSerializer {
             $strMsg = '[SourceDB: ' . $this->sourcePdo->getDsn() . ' TargetDB: ' . $this->targetConnection->getDatabase();
             $strMsg .= ' Dictionary: ' . $this->dict->getName();
             $strMsg .= '] Failed getting cases to process for dictionary';
-            $this->logger->error($strMsg, array("context" => (string) $e));
+            $this->logger->error($strMsg, ["context" => (string) $e]);
             throw new \Exception($strMsg, 0, $e);
         }
     }
+
+
+    /**** end */
 
     public function serializeQuestionnaireRecords() {
         $iLevel = 0;

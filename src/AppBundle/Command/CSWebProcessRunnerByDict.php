@@ -21,46 +21,42 @@ use Doctrine\DBAL\Schema;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Configuration;
 use AppBundle\CSPro\DBConfigSettings;
+use Symfony\Component\Console\Input\InputArgument;
 
 /**
  * Description of CSWebProcessRunner - based on https://stackoverflow.com/questions/54127418/backend-multi-threading-in-php-7-symfony4
  *
  * @author savy
  */
-class CSWebProcessRunner extends Command {
+class CSWebProcessRunnerByDict extends Command {
 
+    protected static $defaultName = 'csweb:process-cases-by-dict';
     use LockableTrait;
 
-    const MAX_TIME_LIMIT = 240; //seconds 
+    public const MAX_TIME_LIMIT = 3600; //seconds 
 
     private $startTime;
-    private $kernel;
-    private $logger;
     private $phpBinaryPath;
-    private $pdo;
     private $dictionaryMap;
     private $maxCasesPerChunk;
     private $output;
 
     //TODO: eventually use  DBAL instead of PDO for all the service operations.
-    public function __construct(PdoHelper $pdo, KernelInterface $kernel, LoggerInterface $commandLogger) {
+    public function __construct(private PdoHelper $pdo, private KernelInterface $kernel, private LoggerInterface $logger) {
         parent::__construct();
-        $this->kernel = $kernel;
-        $this->logger = $commandLogger;
-        $this->pdo = $pdo;
-        $this->dictionaryMap = array();
+        $this->dictionaryMap = [];
     }
 
     protected function configure() {
         //configuration is set to running max three threads per dictionary with each thread processing a a max of 500 cases
-        $this
-                ->setName('csweb:process-cases')
-                ->setDescription('CSWeb blob breakout processing into multiple threads')
+        $this->setDescription('CSWeb blob breakout processing into multiple threads')
                 ->addOption('threads', 't', InputOption::VALUE_REQUIRED, 'Number of threads to run at once per dictionary', 3)
-                ->addOption('maxCasesPerChunk', 'c', InputOption::VALUE_REQUIRED, 'Number of cases to process per chunk', 500);
+                ->addOption('maxCasesPerChunk', 'c', InputOption::VALUE_REQUIRED, 'Number of cases to process per chunk', 1000)
+                ->addArgument('dictionnaires', InputArgument::IS_ARRAY, 'Tableau de dictionnaires cspro');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output) {
+        $dictionnaires = $input->getArgument('dictionnaires');
         if (!$this->lock()) {
             $output->writeln('The command is already running in another process.');
             $this->logger->info('The command is already running in another process.');
@@ -74,6 +70,7 @@ class CSWebProcessRunner extends Command {
         $output->writeln('Running blob breakout process.');
         if (extension_loaded('pcntl')) {
             $stop = function () {
+                $output = null;
                 $this->logger->error('Abort process issued');
                 $output->writeln('Abort process issued.');
                 $output->writeln('Stopping blob breakout process.');
@@ -84,7 +81,7 @@ class CSWebProcessRunner extends Command {
             pcntl_async_signals(true);
         }
         //generate schema for each dictionary that is to be processed if it does not exists 
-        $this->createDictionarySchemas();
+        $this->createDictionarySchemas($dictionnaires);
         $stopProcess = $this->hasProcessTimeExpired();
         do {
             try {
@@ -94,14 +91,14 @@ class CSWebProcessRunner extends Command {
 
                     $dictionaryInfo = &$this->dictionaryMap[$dictionaryName];
 
-                    if ($dictionaryInfo->processFlag == false && count($dictionaryInfo->processes) == 0) {
+                    if ($dictionaryInfo->processFlag == false && (is_countable($dictionaryInfo->processes) ? count($dictionaryInfo->processes) : 0) == 0) {
                         //no jobs available and no running threads for this dictionary. Remove dictionary from processing
                         unset($this->dictionaryMap[$dictionaryName]);
                         $this->logger->info("No jobs available to process for dictionary: " . $dictionaryName);
                     }
                     //create new threads if duration is within process expiry time.
-                    while (count($dictionaryInfo->processes) < $threadsPerDictionary && !$this->hasProcessTimeExpired() && $dictionaryInfo->processFlag) {
-                        $output->writeln('Processing dictionary: ' . $dictionaryName . '- Running threads ' . count($dictionaryInfo->processes));
+                    while ((is_countable($dictionaryInfo->processes) ? count($dictionaryInfo->processes) : 0) < $threadsPerDictionary && !$this->hasProcessTimeExpired() && $dictionaryInfo->processFlag) {
+                        $output->writeln('Processing dictionary: ' . $dictionaryName . '- Running threads ' . (is_countable($dictionaryInfo->processes) ? count($dictionaryInfo->processes) : 0));
                         $this->logger->debug('CSWeb Process Runner creating a new blob breakout thread');
                         $output->writeln('creating a new blob breakout thread');
                         $process = $this->createProcess($dictionaryName);
@@ -114,9 +111,7 @@ class CSWebProcessRunner extends Command {
                     }
 
                     //filters array and returns running processes for the current dictionary
-                    $dictionaryInfo->processes = array_filter($dictionaryInfo->processes, function (Process $p) {
-                        return $p->isRunning();
-                    });
+                    $dictionaryInfo->processes = array_filter($dictionaryInfo->processes, fn(Process $p) => $p->isRunning());
                 }
                 //For use to debug
                 /* for ($j = 0; $j < count($dictionaryInfo->processes); $j++) {
@@ -133,7 +128,7 @@ class CSWebProcessRunner extends Command {
                   $this->output->writeln("after removal process count is " . count($dictionaryInfo->processes));
                   } */
                 sleep(1);
-            } catch (RuntimeException $e) {
+            } catch (RuntimeException) {
                 try {
                     $this->output->writeln("killing process");
                     defined('SIGKILL') || define('SIGKILL', 9);
@@ -144,7 +139,7 @@ class CSWebProcessRunner extends Command {
                                 $p->signal(SIGKILL);
                             }, $dictionaryInfo->processes);
                     }
-                } catch (\Throwable $e) {
+                } catch (\Throwable) {
                     
                 }
                 break;
@@ -156,6 +151,7 @@ class CSWebProcessRunner extends Command {
     }
 
     private function createProcess($dictName) {
+        // var_dump('HERE'); die;
         if (!isset($this->dictionaryMap[$dictName])) {
             $this->logger->error("Invalid dictionary Map. Dictionary Information not set for dictionary " . $dictName);
             return null;
@@ -185,7 +181,6 @@ class CSWebProcessRunner extends Command {
             ];
             $this->output->writeln('Processing for dictionary ' . $dictName . ' jobID: ' . $jobId);
             $this->logger->debug('Processing for dictionary ' . $dictName . ' jobID: ' . $jobId);
-
             return new Process($cmd);
         }
         $this->output->writeln('No jobs available to run for dictionary: ' . $dictName);
@@ -194,52 +189,44 @@ class CSWebProcessRunner extends Command {
         return null;
     }
 
-    private function createDictionarySchema($processCasesOptions) {
+    private function createDictionarySchemas($tabDict) {
 
-        $bind = [];
-        try {
-            $dictionarySchema = new MySQLDictionarySchemaGenerator($this->logger);
-            $processCasesOptions = $this->getProcessCaseOptions();
-            $schema = $dictionarySchema->generateDictionary($this->dictionary, $processCasesOptions);
-            $dictionarySQL = $schema->toSql($this->conn->getDatabasePlatform());
-            $explodedDictionarySQL = implode(";" . PHP_EOL, $dictionarySQL);
-            $this->logger->debug("writing schema SQL " . $explodedDictionarySQL);
+        $listDictName = "'DICT'";
 
-            foreach($dictionarySQL AS $oneDictionarySQL){
-                $this->conn->prepare($oneDictionarySQL)->execute();
+        foreach($tabDict as $dict){
+            $listDictName = $listDictName .",'".$dict."'";
+        }
+
+        //do exception handling
+        $stm = 'SELECT id, dictionary_name as dictName FROM `cspro_dictionaries` JOIN `cspro_dictionaries_schema`  ON dictionary_id = cspro_dictionaries.id WHERE dictionary_name IN ('.$listDictName.')';
+
+        $result = $this->pdo->fetchAll($stm);
+
+        if (count($result) > 0) {
+            $this->dictionaryMap = [];
+            foreach ($result as $row) {
+                $this->logger->info('Updating schema tables for Dictionary: ' . $row['dictName']);
+                $dictionarySchemaHelper = new DictionarySchemaHelper($row['dictName'], $this->pdo, $this->logger);
+                $dictionarySchemaHelper->initialize(true);
+                $dictionarySchemaHelper->resetInProcesssJobs();
+
+                //set the dictionary information
+                $dictionaryInfo = new \stdClass;
+                $dictionaryInfo->schemaHelper = $dictionarySchemaHelper;
+                $dictionaryInfo->processFlag = true;
+                $dictionaryInfo->processes = [];
+
+                $this->dictionaryMap[$row['dictName']] = $dictionaryInfo;
             }
-
-            //insert into cspro_meta dictionary information
-            $dictionaryVersion = $this->dictionary->getVersion();
-
-            //Récupération du label du dictionnaire concerné par les insertions dans la table labeldictionnaire_cspro_meta
-            $dictionaryLabel = str_replace(" ", "_", str_replace("_DICT", "", $this->dictionary->getName()));
-
-            $stm = "SELECT modified_time, `dictionary_full_content` FROM `cspro_dictionaries` "
-                    . " WHERE  `dictionary_name` = '" . $this->dictionaryName . "'";
-            $result = $this->pdo->fetchOne($stm);
-            if ($result) {
-                $stm = "INSERT INTO ".strtolower($dictionaryLabel)."_cspro_meta(cspro_version, dictionary, source_modified_time) "
-                . "VALUES (:version, :dictionary, :source_modified_time)";
-                $bind['version'] = $dictionaryVersion;
-                $bind['dictionary'] = $result['dictionary_full_content'];
-                $bind['source_modified_time'] = $result['modified_time'];
-                $stmt = $this->conn->executeUpdate($stm, $bind);
-            }
-        } catch (\Exception $e) {
-            $strMsg = "Failed generating tables in database: " . $this->connectionParams['dbname'] . " while processsing Dictionary: " . $this->dictionaryName;
-            $this->logger->error($strMsg, ["context" => (string) $e]);
-            throw $e;
         }
     }
-
 
     private function canExitProcess(): bool {
         $flag = true;
         foreach (array_keys($this->dictionaryMap) as $dictionaryName) {
             $dictionaryInfo = $this->dictionaryMap[$dictionaryName];
             $processes = $dictionaryInfo->processes;
-            if (isset($processes) && count($processes) > 0) { //if threads are running return false;
+            if (isset($processes) && (is_countable($processes) ? count($processes) : 0) > 0) { //if threads are running return false;
                 $flag = false;
                 break;
             }
@@ -253,3 +240,4 @@ class CSWebProcessRunner extends Command {
     }
 
 }
+
